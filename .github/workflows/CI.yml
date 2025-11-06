@@ -70,16 +70,27 @@ jobs:
             target/
           key: i686-pc-windows-msvc-cargo-${{ runner.os }}
 
-      - name: Setup x86 MSVC environment
-        shell: cmd
+      - name: Find VC tools path
+        id: vc
+        shell: powershell
         run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86
+          # 在 GitHub runner 上查找 VSINSTALLDIR
+          if (Test-Path $Env:VSINSTALLDIR) {
+            Write-Output "VS_INSTALL=$Env:VSINSTALLDIR"
+            echo "VS_INSTALL=$Env:VSINSTALLDIR" >> $Env:GITHUB_ENV
+          } else {
+            # fallback: 默认路径
+            $default="C:\Program Files\Microsoft Visual Studio\2022\BuildTools"
+            Write-Output "VS_INSTALL=$default"
+            echo "VS_INSTALL=$default" >> $Env:GITHUB_ENV
+          }
 
       - name: Build 32-bit .node
         shell: cmd
         run: |
           set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=32
           set CARGO_PROFILE_RELEASE_LTO=false
+          call "%VS_INSTALL%\VC\Auxiliary\Build\vcvarsall.bat" x86
           yarn build --target i686-pc-windows-msvc
 
       - name: Upload artifact
