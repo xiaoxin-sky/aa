@@ -1,37 +1,33 @@
-name: CI
+name: Build 32-bit NAPI
+
 env:
   DEBUG: napi:*
   APP_NAME: aa
-  MACOSX_DEPLOYMENT_TARGET: '10.13'
   CARGO_INCREMENTAL: '1'
-'on':
+
+on:
   push:
     branches:
       - main
-    tags-ignore:
-      - '**'
-    paths-ignore:
-      - '**/*.md'
-      - LICENSE
-      - '**/*.gitignore'
-      - .editorconfig
-      - docs/**
-  pull_request: null
+  pull_request:
+  workflow_dispatch:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Setup node
+      - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: yarn
-      - name: Install
+      - name: Install Rust tools
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -43,28 +39,25 @@ jobs:
         run: cargo fmt -- --check
       - name: Clippy
         run: cargo clippy
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - host: windows-latest
-            build: yarn build --target i686-pc-windows-msvc
-            target: i686-pc-windows-msvc
-    name: stable - ${{ matrix.settings.target }} - node@22
-    runs-on: ${{ matrix.settings.host }}
+
+  build_32bit:
+    name: Build 32-bit Windows NAPI
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Setup node
+
+      - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: yarn
-      - name: Install
+
+      - name: Install Rust target
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          targets: ${{ matrix.settings.target }}
+          targets: i686-pc-windows-msvc
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -75,77 +68,25 @@ jobs:
             ~/.napi-rs
             .cargo-cache
             target/
-          key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
-      - uses: mlugg/setup-zig@v2
-        if: ${{ contains(matrix.settings.target, 'musl') }}
-        with:
-          version: 0.14.1
-      - name: Install cargo-zigbuild
-        uses: taiki-e/install-action@v2
-        if: ${{ contains(matrix.settings.target, 'musl') }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          tool: cargo-zigbuild
-      - name: Setup toolchain
-        run: ${{ matrix.settings.setup }}
-        if: ${{ matrix.settings.setup }}
-        shell: bash
-      - name: Install dependencies
-        run: yarn install
-      - name: Build
-        run: ${{ matrix.settings.build }}
-        shell: bash
+          key: i686-pc-windows-msvc-cargo-${{ runner.os }}
+
+      - name: Setup x86 MSVC environment
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86
+
+      - name: Build 32-bit .node
+        shell: cmd
+        run: |
+          set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=32
+          set CARGO_PROFILE_RELEASE_LTO=false
+          yarn build --target i686-pc-windows-msvc
+
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
-          name: bindings-${{ matrix.settings.target }}
+          name: bindings-i686-pc-windows-msvc
           path: |
             ${{ env.APP_NAME }}.*.node
             ${{ env.APP_NAME }}.*.wasm
           if-no-files-found: error
-  publish:
-    name: Publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-    needs:
-      - lint
-    steps:
-      - uses: actions/checkout@v5
-      - name: Setup node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: yarn
-      - name: Install dependencies
-        run: yarn install
-      - name: create npm dirs
-        run: yarn napi create-npm-dirs
-      - name: Download all artifacts
-        uses: actions/download-artifact@v6
-        with:
-          path: artifacts
-      - name: Move artifacts
-        run: yarn artifacts
-      - name: List packages
-        run: ls -R ./npm
-        shell: bash
-      - name: Publish
-        run: |
-          npm config set provenance true
-          if git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+$";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --access public
-          elif git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --tag next --access public
-          else
-            echo "Not a release, skipping publish"
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
